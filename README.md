@@ -20,3 +20,4 @@ Finally, I have also provided a pod [debug-pod.yaml](debug-pod.yaml) to debug th
 
 Do not hesitate to create an issue if there is any questions, remarks, improvements.
 
+**Disclaimer**: This code is only for demonstration purpose. My or my employer responsability could not be involved in this code reutilisation.
