@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: android-build
+  labels:
+    app: android-build
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: android-build
+  template:
+    metadata:
+      labels:
+        app: android-build
+    spec:
+      containers:
+      - name: android-build
+        image: guismo/android-build
+        resources:
+          requests:
+            memory: "1G"
+            cpu: "6"
+        volumeMounts:
+          - name: root-mount
+            mountPath: /build
+      volumes:
+        - name: root-mount
+          hostPath:
+            path: /mnt/disks/sdb

@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug
+spec:
+  hostPID: true # Facilitate entering the host mount namespace via init
+  serviceAccountName: internal-kubectl
+  containers:
+  - name: debug
+    image: ubuntu
+    command:
+    - tail
+    - "-f"
+    - /dev/null
+    env:
+      - name: ROOT_MOUNT_DIR
+        value: /root
+    securityContext:
+      privileged: true
+    volumeMounts:
+      - name: root-mount
+        mountPath: /root
+        mountPropagation: Bidirectional
+  nodeSelector:
+    cloud.google.com/gke-nodepool: "bigger"
+  volumes:
+    - name: root-mount
+      hostPath:
+        path: /

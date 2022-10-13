@@ -1,0 +1,192 @@
+# Init env variables
+NAME=Guillaume Morini
+EMAIL=guillaume@morini.name
+SUFFIX=android
+PROJECT=dev-${SUFFIX}-3278
+FOLDER=........
+BILLING=$(gcloud beta billing accounts list | awk '{print $1}' | tail -1)
+ORG_ID=$(gcloud organizations list | awk '{print $2}' | tail -1)
+NETWORK=vpc-${SUFFIX}
+SUBNET=subnet-${SUFFIX}
+SUBNET_RANGE=10.0.0.0/24
+REGION=europe-west9
+GKE_SERVICE_ACCOUNT_NAME=sa-gke-${SUFFIX}
+GKE_CLUSTER_NAME=gke-${SUFFIX}-1
+GKE_CLUSTER_VERSION=1.24.5-gke.600
+GKE_MACHINE_TYPE=e2-standard-4
+GKE_RELEASE_CHANNEL=rapid
+GKE_NB_NODES_PER_ZONE=1
+GKE_BIGGER_MACHINE_TYPE=e2-standard-8
+
+# Create and set project
+gcloud projects create ${PROJECT} --folder=${FOLDER}
+gcloud config set project ${PROJECT}
+
+# Add billing account to the project
+gcloud billing projects link ${PROJECT} --billing-account ${BILLING}
+
+# Enable APIs
+gcloud services enable compute.googleapis.com
+gcloud services enable container.googleapis.com
+
+# Update org policies
+echo """
+constraint: constraints/compute.vmExternalIpAccess
+listPolicy:
+  allValues: ALLOW
+""" > org_policy_externalIp.yaml
+
+gcloud beta resource-manager org-policies set-policy org_policy_externalIp.yaml  --project $PROJECT 
+
+echo """
+constraint: constraints/compute.requireShieldedVm
+booleanPolicy:
+  enforced: false
+
+""" > org_policy_shieldedVm.yaml
+
+gcloud beta resource-manager org-policies set-policy org_policy_shieldedVm.yaml  --project $PROJECT 
+
+# Create network and subnet
+gcloud compute networks create ${NETWORK} \
+    --subnet-mode=custom
+
+gcloud compute networks subnets create ${SUBNET} \
+    --network=${NETWORK} \
+    --range=${SUBNET_RANGE} \
+    --region=${REGION}
+
+# Add firewall rules
+gcloud compute firewall-rules create allow-ssh --network ${NETWORK} --allow tcp:22
+
+# Create service account
+gcloud iam service-accounts create "$GKE_SERVICE_ACCOUNT_NAME" \
+  --display-name="$GKE_SERVICE_ACCOUNT_NAME"
+GKE_SERVICE_ACCOUNT_EMAIL="$(gcloud iam service-accounts list \
+    --format='value(email)' \
+    --filter=displayName:"$GKE_SERVICE_ACCOUNT_NAME")"
+gcloud projects add-iam-policy-binding \
+    "$(gcloud config get-value project 2> /dev/null)" \
+    --member serviceAccount:"$GKE_SERVICE_ACCOUNT_EMAIL" \
+    --role roles/compute.admin
+gcloud projects add-iam-policy-binding \
+    "$(gcloud config get-value project 2> /dev/null)" \
+    --member serviceAccount:"$GKE_SERVICE_ACCOUNT_EMAIL" \
+    --role roles/monitoring.viewer
+gcloud projects add-iam-policy-binding \
+    "$(gcloud config get-value project 2> /dev/null)" \
+    --member serviceAccount:"$GKE_SERVICE_ACCOUNT_EMAIL" \
+    --role roles/monitoring.metricWriter
+gcloud projects add-iam-policy-binding \
+    "$(gcloud config get-value project 2> /dev/null)" \
+    --member serviceAccount:"$GKE_SERVICE_ACCOUNT_EMAIL" \
+    --role roles/logging.logWriter
+gcloud projects add-iam-policy-binding \
+    "$(gcloud config get-value project 2> /dev/null)" \
+    --member serviceAccount:"$GKE_SERVICE_ACCOUNT_EMAIL" \
+    --role roles/iam.serviceAccountUser
+
+# GKE Cluster creation
+gcloud container clusters create ${GKE_CLUSTER_NAME} --region=${REGION} --service-account=${GKE_SERVICE_ACCOUNT_EMAIL} --num-nodes=${GKE_NB_NODES_PER_ZONE} --machine-type=${GKE_MACHINE_TYPE}  \
+    --network=${NETWORK} --subnetwork=${SUBNET} --cluster-version=${GKE_CLUSTER_VERSION} --release-channel=${GKE_RELEASE_CHANNEL}
+
+# Disk creation
+for z in a b c;  
+do
+    for i in $(seq 2 3);  
+    do
+        ZONE=${REGION}-${z}
+        DISK_NAME="build"${i}${z}
+        gcloud compute disks create "$DISK_NAME" --size=1024 --zone="$ZONE"
+    done
+done
+
+# Test disk mount
+
+gcloud compute instances attach-disk gke-gke-android-1-default-pool-69dc739e-4w5q --device-name sdb --disk build1a --zone europe-west9-a
+gcloud compute instances attach-disk gke-gke-android-1-default-pool-69dc739e-4w5q --device-name sdc --disk build2a --zone europe-west9-a
+gcloud compute instances attach-disk gke-gke-android-1-default-pool-69dc739e-4w5q --device-name sdd --disk build3a --zone europe-west9-a
+
+gcloud compute instances attach-disk gke-gke-android-1-default-pool-c6f3e287-164s --device-name sdb --disk build1b --zone europe-west9-b
+gcloud compute instances attach-disk gke-gke-android-1-default-pool-c6f3e287-164s --device-name sdc --disk build2b --zone europe-west9-b
+gcloud compute instances attach-disk gke-gke-android-1-default-pool-c6f3e287-164s --device-name sdd --disk build3b --zone europe-west9-b
+
+gcloud compute instances attach-disk gke-gke-android-1-default-pool-b4813c6d-86np --device-name sdb --disk build1c --zone europe-west9-c
+gcloud compute instances attach-disk gke-gke-android-1-default-pool-b4813c6d-86np --device-name sdc --disk build2c --zone europe-west9-c
+gcloud compute instances attach-disk gke-gke-android-1-default-pool-b4813c6d-86np --device-name sdd --disk build3c --zone europe-west9-c
+
+
+gcloud compute ssh gke-gke-android-1-default-pool-69dc739e-4w5q --zone "europe-west9-a"
+gcloud compute ssh gke-gke-android-1-default-pool-c6f3e287-164s --zone "europe-west9-b"
+gcloud compute ssh gke-gke-android-1-default-pool-b4813c6d-86np --zone "europe-west9-c"
+sudo -i
+
+for i in b c d
+do
+  mkdir -p /mnt/disks/sd$i
+  mkfs.ext4 -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard /dev/sd$i
+  mount /dev/sd$i /mnt/disks/sd$i
+done
+
+
+gcloud compute instances detach-disk gke-gke-android-1-default-pool-69dc739e-4w5q  --disk build1a --zone europe-west9-a
+gcloud compute instances detach-disk gke-gke-android-1-default-pool-69dc739e-4w5q  --disk build2a --zone europe-west9-a
+gcloud compute instances detach-disk gke-gke-android-1-default-pool-69dc739e-4w5q --disk build3a --zone europe-west9-a
+
+gcloud compute instances detach-disk gke-gke-android-1-default-pool-c6f3e287-164s  --disk build1b --zone europe-west9-b
+gcloud compute instances detach-disk gke-gke-android-1-default-pool-c6f3e287-164s  --disk build2b --zone europe-west9-b
+gcloud compute instances detach-disk gke-gke-android-1-default-pool-c6f3e287-164s  --disk build3b --zone europe-west9-b
+
+gcloud compute instances detach-disk gke-gke-android-1-default-pool-b4813c6d-86np  --disk build1c --zone europe-west9-c
+gcloud compute instances detach-disk gke-gke-android-1-default-pool-b4813c6d-86np  --disk build2c --zone europe-west9-c
+gcloud compute instances detach-disk gke-gke-android-1-default-pool-b4813c6d-86np  --disk build3c --zone europe-west9-c
+
+# Add node pool to scale the GKE cluster
+
+
+gcloud container node-pools create bigger \
+    --cluster ${GKE_CLUSTER_NAME} --region=${REGION} \
+    --service-account ${GKE_SERVICE_ACCOUNT_EMAIL} \
+    --machine-type=${GKE_BIGGER_MACHINE_TYPE} \
+    --num-nodes=0 \
+    --enable-autoscaling --max-nodes=3 --min-nodes=0 \
+    --node-taints special=bigger:NoSchedule
+
+# Get GKE credentials
+gcloud container clusters get-credentials ${GKE_CLUSTER_NAME} --region ${REGION} --project ${PROJECT}  
+
+
+# test autoscale cluster
+
+
+
+k delete deploy --all
+k delete po --all
+k delete cm entrypoint
+k delete ds node-initializer 
+k delete job --all
+k delete -f sa.yaml
+
+k apply -f sa.yaml
+k apply -f cm-entrypoint.yaml
+k apply -f daemon-set.yaml
+k apply -f deployment.yaml
+k apply -f job.yaml 
+k get po -o wide -w
+
+k logs -f -l app=default-init -c node-initializer
+
+
+# Init build android
+apt-get update -y
+apt-get install -y repo
+repo version
+
+git config --global user.name ${NAME}
+git config --global user.email ${EMAIL}
+
+repo init -u https://android.googlesource.com/platform/manifest
+repo sync -c -j8
+
+
+
